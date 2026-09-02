@@ -1,0 +1,241 @@
+import os
+import base64
+import tempfile
+from collections import defaultdict
+import runpod
+
+from docling.document_converter import DocumentConverter, PdfFormatOption, ImageFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions
+from docling.datamodel.base_models import InputFormat
+from docling_core.types.doc.labels import DocItemLabel
+
+# 1. Configuración de Pipeline acelerado por GPU
+pipeline_options = PdfPipelineOptions()
+pipeline_options.accelerator_options = AcceleratorOptions(
+    num_threads=4,
+    device="cuda"
+)
+pipeline_options.do_table_structure = True
+pipeline_options.do_ocr = True  # Imprescindible para imágenes y escaneos
+
+# 2. Inicialización de conversores soportando PDF y formatos de imagen (incluyendo WebP)
+converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+        InputFormat.IMAGE: ImageFormatOption(pipeline_options=pipeline_options)
+    }
+)
+
+def detect_file_extension(file_bytes: bytes) -> str:
+    """Detecta la extensión del archivo usando los números mágicos del encabezado."""
+    if file_bytes.startswith(b"%PDF"):
+        return ".pdf"
+    if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if file_bytes.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    # WebP: Comienza con 'RIFF', seguido de 4 bytes de tamaño y luego 'WEBP'
+    if file_bytes.startswith(b"RIFF") and len(file_bytes) >= 12 and file_bytes[8:12] == b"WEBP":
+        return ".webp"
+    if file_bytes.startswith(b"II*\x00") or file_bytes.startswith(b"MM\x00*"):
+        return ".tiff"
+    if file_bytes.startswith(b"BM"):
+        return ".bmp"
+    return ".pdf"  # Fallback por defecto
+
+def compute_bounding_box(bboxes):
+    """Calcula el rectángulo envolvente (x1, y1, x2, y2) a partir de una lista de cajas."""
+    valid_boxes = [b for b in bboxes if b]
+    if not valid_boxes:
+        return None
+    return {
+        "x1": round(min(b["x1"] for b in valid_boxes), 2),
+        "y1": round(min(b["y1"] for b in valid_boxes), 2),
+        "x2": round(max(b["x2"] for b in valid_boxes), 2),
+        "y2": round(max(b["y2"] for b in valid_boxes), 2)
+    }
+
+def format_bbox(prov, page_heights):
+    """Convierte el bbox de Docling a TOPLEFT (x1, y1, x2, y2)."""
+    if not prov or not getattr(prov, "bbox", None):
+        return None, None
+
+    b = prov.bbox
+    page_num = prov.page_no
+    page_h = page_heights.get(page_num)
+
+    # Invertir coordenada vertical si el origen del documento es BOTTOMLEFT
+    if str(b.coord_origin).upper() == "BOTTOMLEFT" and page_h:
+        raw_x1, raw_y1 = b.l, page_h - b.t
+        raw_x2, raw_y2 = b.r, page_h - b.b
+    else:
+        raw_x1, raw_y1 = b.l, b.t
+        raw_x2, raw_y2 = b.r, b.b
+
+    bbox = {
+        "x1": round(min(raw_x1, raw_x2), 2),
+        "y1": round(min(raw_y1, raw_y2), 2),
+        "x2": round(max(raw_x1, raw_x2), 2),
+        "y2": round(max(raw_y1, raw_y2), 2)
+    }
+    return page_num, bbox
+
+def handler(event):
+    job_input = event.get("input", {})
+    
+    # Soporte para claves directas o genéricas
+    file_url = job_input.get("file_url") or job_input.get("pdf_url") or job_input.get("image_url")
+    file_base64 = job_input.get("file_base64") or job_input.get("pdf_base64") or job_input.get("image_base64")
+
+    if not file_url and not file_base64:
+        return {
+            "error": "Debes proporcionar un archivo mediante URL ('file_url', 'pdf_url') o Base64 ('file_base64', 'pdf_base64')",
+            "status": "failed"
+        }
+
+    tmp_path = None
+    try:
+        if file_url:
+            source = file_url
+        else:
+            file_bytes = base64.b64decode(file_base64)
+            ext = detect_file_extension(file_bytes)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+            source = tmp_path
+
+        # Procesar con Docling
+        result = converter.convert(source)
+        doc = result.document
+
+        # 1. Mapear dimensiones de cada página/imagen
+        pages_dict = {}
+        page_heights = {}
+        
+        if hasattr(doc, "pages") and doc.pages:
+            for p_num, page in doc.pages.items():
+                width = getattr(page.size, "width", None) or getattr(page.size, "w", None)
+                height = getattr(page.size, "height", None) or getattr(page.size, "h", None)
+                h_val = round(height, 2) if height is not None else None
+                w_val = round(width, 2) if width is not None else None
+
+                # Determinar unidad: 'pixels' si es imagen o no tiene dimensiones en puntos estándar
+                is_image_doc = bool(tmp_path and not tmp_path.lower().endswith(".pdf"))
+                unit = "pixels" if is_image_doc else "points"
+
+                page_heights[p_num] = h_val
+                pages_dict[p_num] = {
+                    "page": p_num,
+                    "width": w_val,
+                    "height": h_val,
+                    "unit": unit,
+                    "elements": []
+                }
+
+        # 2. Extraer elementos de la maquetación
+        for item, _ in doc.iterate_items():
+            text_content = getattr(item, "text", "")
+            if not text_content and hasattr(item, "export_to_markdown"):
+                text_content = item.export_to_markdown()
+
+            prov = item.prov[0] if getattr(item, "prov", None) else None
+            page_num, block_bbox = format_bbox(prov, page_heights)
+
+            # Extracción de líneas
+            lines = []
+            if hasattr(item, "prov") and len(item.prov) > 1:
+                for sub_prov in item.prov:
+                    _, sub_bbox = format_bbox(sub_prov, page_heights)
+                    lines.append({
+                        "text": getattr(sub_prov, "text", None) or text_content,
+                        "bbox": sub_bbox
+                    })
+            elif text_content and "\n" in text_content:
+                for line_text in text_content.splitlines():
+                    cleaned = line_text.strip()
+                    if cleaned:
+                        lines.append({
+                            "text": cleaned,
+                            "bbox": block_bbox
+                        })
+
+            # Extracción jerárquica de tablas
+            table_data = None
+            is_table = (
+                getattr(item, "label", None) == DocItemLabel.TABLE or 
+                str(getattr(item, "label", "")).lower() == "table"
+            )
+
+            if is_table and hasattr(item, "data") and hasattr(item.data, "table_cells"):
+                rows_dict = defaultdict(list)
+                for cell in item.data.table_cells:
+                    cell_prov = cell.prov[0] if getattr(cell, "prov", None) else None
+                    _, cell_bbox = format_bbox(cell_prov, page_heights)
+
+                    rows_dict[cell.start_row_offset_idx].append({
+                        "col_start": cell.start_col_offset_idx,
+                        "col_end": cell.end_col_offset_idx,
+                        "row_start": cell.start_row_offset_idx,
+                        "row_end": cell.end_row_offset_idx,
+                        "text": cell.text.strip(),
+                        "bbox": cell_bbox
+                    })
+
+                structured_rows = []
+                for r_idx in sorted(rows_dict.keys()):
+                    cells_in_row = sorted(rows_dict[r_idx], key=lambda c: c["col_start"])
+                    row_bbox = compute_bounding_box([c["bbox"] for c in cells_in_row])
+                    row_text = " | ".join(c["text"] for c in cells_in_row if c["text"])
+
+                    structured_rows.append({
+                        "row_index": r_idx,
+                        "text": row_text,
+                        "bbox": row_bbox,
+                        "cells": cells_in_row
+                    })
+
+                table_data = {
+                    "text": text_content,
+                    "bbox": block_bbox,
+                    "num_rows": getattr(item.data, "num_rows", len(structured_rows)),
+                    "num_cols": getattr(item.data, "num_cols", None),
+                    "rows": structured_rows
+                }
+
+            element_obj = {
+                "label": item.label.value if hasattr(item.label, "value") else str(item.label),
+                "text": text_content,
+                "bbox": block_bbox,
+                "lines": lines,
+                "table_data": table_data
+            }
+
+            # Asociar el elemento a su página (o crear la página 1 si no existía el registro previo)
+            target_page = page_num if (page_num and page_num in pages_dict) else 1
+            if target_page not in pages_dict:
+                pages_dict[target_page] = {
+                    "page": target_page,
+                    "width": None,
+                    "height": None,
+                    "unit": "pixels" if (tmp_path and not tmp_path.lower().endswith(".pdf")) else "points",
+                    "elements": []
+                }
+            pages_dict[target_page]["elements"].append(element_obj)
+
+        sorted_pages = [pages_dict[k] for k in sorted(pages_dict.keys())]
+
+        return {
+            "status": "success",
+            "markdown": doc.export_to_markdown(),
+            "pages": sorted_pages
+        }
+
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+runpod.serverless.start({"handler": handler})

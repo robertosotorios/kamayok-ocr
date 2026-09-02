@@ -1,0 +1,55 @@
+{
+  "status": "success",
+  "markdown": "# FACTURA\n\n...",
+  "pages": [
+    {
+      "page": 1,
+      "width": 595.28,
+      "height": 841.89,
+      "unit": "points",
+      "elements": [
+        {
+          "label": "title",
+          "text": "FACTURA",
+          "bbox": { "x1": 50.0, "y1": 55.0, "x2": 180.0, "y2": 78.0 },
+          "lines": [
+            {
+              "text": "FACTURA",
+              "bbox": { "x1": 50.0, "y1": 55.0, "x2": 180.0, "y2": 78.0 }
+            }
+          ],
+          "table_data": null
+        },
+        {
+          "label": "table",
+          "text": "| Concepto | Cantidad | Total |\n...",
+          "bbox": { "x1": 50.0, "y1": 185.0, "x2": 545.0, "y2": 275.0 },
+          "lines": [],
+          "table_data": {
+            "text": "| Concepto | Cantidad | Total |\n...",
+            "bbox": { "x1": 50.0, "y1": 185.0, "x2": 545.0, "y2": 275.0 },
+            "num_rows": 2,
+            "num_cols": 3,
+            "rows": [
+              {
+                "row_index": 0,
+                "text": "Concepto | Cantidad | Total",
+                "bbox": { "x1": 50.0, "y1": 185.0, "x2": 545.0, "y2": 210.0 },
+                "cells": [
+                  {
+                    "col_start": 0,
+                    "col_end": 1,
+                    "row_start": 0,
+                    "row_end": 1,
+                    "text": "Concepto",
+                    "bbox": { "x1": 50.0, "y1": 185.0, "x2": 270.0, "y2": 210.0 }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
