@@ -1,22 +1,46 @@
 import os
 import base64
 import tempfile
+import torch
 from collections import defaultdict
 import runpod
 
 from docling.document_converter import DocumentConverter, PdfFormatOption, ImageFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, AcceleratorOptions
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    AcceleratorOptions,
+    AcceleratorDevice,
+    EasyOcrOptions,
+)
 from docling.datamodel.base_models import InputFormat
 from docling_core.types.doc.labels import DocItemLabel
 
-# 1. Configuración de Pipeline acelerado por GPU
+# 0. Diagnóstico y verificación de GPU
+cuda_available = torch.cuda.is_available()
+device = AcceleratorDevice.CUDA if cuda_available else AcceleratorDevice.CPU
+print(f"[Docling Worker] CUDA Available: {cuda_available}")
+if cuda_available:
+    print(f"[Docling Worker] GPU Model: {torch.cuda.get_device_name(0)}")
+    print(f"[Docling Worker] GPU Count: {torch.cuda.device_count()}")
+    print(f"[Docling Worker] VRAM Total: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
+else:
+    print("[Docling Worker] ⚠️ ADVERTENCIA: CUDA no detectado. Ejecutando en CPU fallback.")
+
+# 1. Configuración de Pipeline con aceleración completa por GPU
 pipeline_options = PdfPipelineOptions()
 pipeline_options.accelerator_options = AcceleratorOptions(
     num_threads=4,
-    device="cuda"
+    device=device
 )
 pipeline_options.do_table_structure = True
-pipeline_options.do_ocr = True  # Imprescindible para imágenes y escaneos
+pipeline_options.do_ocr = True
+
+# Forzar el motor de OCR a utilizar la GPU si está disponible
+if cuda_available:
+    try:
+        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=True)
+    except Exception as e:
+        print(f"[Docling Worker] Nota: Configurando OCR por defecto con GPU ({e})")
 
 # 2. Inicialización de conversores soportando PDF y formatos de imagen (incluyendo WebP)
 converter = DocumentConverter(
