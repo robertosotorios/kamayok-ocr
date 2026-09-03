@@ -258,30 +258,14 @@ def handler(event):
             prov = item.prov[0] if getattr(item, "prov", None) else None
             page_num, block_bbox = format_bbox(prov, page_heights)
 
-            # Extracción de líneas
-            lines = []
-            if hasattr(item, "prov") and len(item.prov) > 1:
-                for sub_prov in item.prov:
-                    _, sub_bbox = format_bbox(sub_prov, page_heights)
-                    lines.append({
-                        "text": getattr(sub_prov, "text", None) or text_content,
-                        "bbox": sub_bbox
-                    })
-            elif text_content and "\n" in text_content:
-                for line_text in text_content.splitlines():
-                    cleaned = line_text.strip()
-                    if cleaned:
-                        lines.append({
-                            "text": cleaned,
-                            "bbox": block_bbox
-                        })
-
-            # Extracción jerárquica de tablas
+            # 2.1 Extracción jerárquica de tablas
             table_data = None
             is_table = (
                 getattr(item, "label", None) == DocItemLabel.TABLE or 
                 str(getattr(item, "label", "")).lower() == "table"
             )
+
+            lines = []
 
             if is_table and hasattr(item, "data") and hasattr(item.data, "table_cells"):
                 rows_dict = defaultdict(list)
@@ -311,6 +295,21 @@ def handler(event):
                         "cells": cells_in_row
                     })
 
+                    # Cada fila de la tabla tiene su propio bbox de fila preciso
+                    if row_text and row_bbox:
+                        lines.append({
+                            "text": row_text,
+                            "bbox": row_bbox
+                        })
+
+                    # Cada celda individual tiene su propio bbox de celda
+                    for c in cells_in_row:
+                        if c["text"] and c["bbox"]:
+                            lines.append({
+                                "text": c["text"],
+                                "bbox": c["bbox"]
+                            })
+
                 table_data = {
                     "text": text_content,
                     "bbox": block_bbox,
@@ -318,6 +317,21 @@ def handler(event):
                     "num_cols": getattr(item.data, "num_cols", None),
                     "rows": structured_rows
                 }
+
+            elif hasattr(item, "prov") and len(item.prov) > 1:
+                # Párrafo o bloque con múltiples cajas sub-prov
+                for sub_prov in item.prov:
+                    _, sub_bbox = format_bbox(sub_prov, page_heights)
+                    lines.append({
+                        "text": getattr(sub_prov, "text", None) or text_content,
+                        "bbox": sub_bbox
+                    })
+            elif text_content:
+                # Bloque de texto estándar
+                lines.append({
+                    "text": text_content.strip(),
+                    "bbox": block_bbox
+                })
 
             element_obj = {
                 "label": item.label.value if hasattr(item.label, "value") else str(item.label),
