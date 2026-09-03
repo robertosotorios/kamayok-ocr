@@ -376,12 +376,15 @@ def handler(event):
 
         sorted_pages = [pages_dict[k] for k in sorted(pages_dict.keys())]
 
-        # 3. Extracción de códigos QR (VeriFactu / TicketBAI)
-        qr_codes = extract_qr_codes(doc, tmp_path)
+        # Limpiar etiquetas de imágenes residuales en el Markdown
+        raw_md = doc.export_to_markdown()
+        clean_md = raw_md.replace("<!-- image -->", "").replace("<!-- 🖼️❌ Image not available. Please use `PdfPipelineOptions(generate_picture_images=True)` -->", "")
+        import re
+        clean_md = re.sub(r'\n{3,}', '\n\n', clean_md).strip()
 
         return {
             "status": "success",
-            "markdown": doc.export_to_markdown(),
+            "markdown": clean_md,
             "qr_codes": qr_codes,
             "pages": sorted_pages
         }
