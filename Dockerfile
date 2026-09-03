@@ -1,8 +1,8 @@
-FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    HF_HUB_ENABLE_HF_TRANSFER=1
+    HF_XET_HIGH_PERFORMANCE=1
 
 # Instalar librerías de sistema requeridas por OpenCV y el renderizado de PDFs
 RUN apt-get update && apt-get install -y --no-install-recommends \
