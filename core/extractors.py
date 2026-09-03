@@ -1,12 +1,130 @@
 """
-Extracción estructurada de tablas jerárquicas (filas y celdas) y maquetación de páginas.
+Extracción estructurada de tablas jerárquicas (filas y celdas), clustering horizontal de líneas y maquetación de páginas.
 """
+import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from docling_core.types.doc.labels import DocItemLabel
 
 from core.geometry import format_bbox, compute_bounding_box
 from core.sanitizer import fix_split_accents
+
+# Regex para detectar formatos numéricos de importe (ej. 1.580,00, 331,80, 45.00, 100€)
+PRICE_REGEX = re.compile(r'\b\d{1,3}(?:\.\d{3})*,\d{2}\s*€?\b|\b\d+\.\d{2}\s*€?\b')
+
+def is_price_or_amount(text: str) -> bool:
+    """Detecta si un texto contiene un formato de importe o precio con decimales."""
+    return bool(PRICE_REGEX.search(text))
+
+def match_line_item_pattern(text: str) -> bool:
+    """Detecta si una línea de texto contiene una estructura de concepto + importe(s)."""
+    has_letters = bool(re.search(r'[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]{3,}', text))
+    has_price = is_price_or_amount(text)
+    return has_letters and has_price
+
+def cluster_horizontal_line_items(elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Agrupa fragmentos de texto en la misma franja horizontal (Y similar) que formen
+    líneas de factura con concepto e importes/precios (ej: 'Concepto' + 'Cant' + 'Precio' + 'Total').
+    """
+    if not elements or len(elements) <= 1:
+        return elements
+
+    # Separar elementos de tablas formales (que ya vienen estructurados) de elementos de texto libre
+    tables = [el for el in elements if el.get("label") == "table" or el.get("table_data")]
+    non_tables = [el for el in elements if el.get("label") != "table" and not el.get("table_data")]
+
+    if not non_tables:
+        return elements
+
+    # Filtrar elementos que tienen bbox válido
+    with_bbox = [el for el in non_tables if el.get("bbox")]
+    without_bbox = [el for el in non_tables if not el.get("bbox")]
+
+    if not with_bbox:
+        return elements
+
+    used = set()
+    clusters: List[List[Dict[str, Any]]] = []
+
+    # Ordenar por coordenada vertical Y1 y luego horizontal X1
+    sorted_els = sorted(with_bbox, key=lambda el: (el["bbox"]["y1"], el["bbox"]["x1"]))
+
+    for i, el in enumerate(sorted_els):
+        if i in used:
+            continue
+        
+        current_cluster = [el]
+        used.add(i)
+        
+        y1_curr = el["bbox"]["y1"]
+        y2_curr = el["bbox"]["y2"]
+        h_curr = y2_curr - y1_curr
+        y_mid_curr = (y1_curr + y2_curr) / 2.0
+
+        for j in range(i + 1, len(sorted_els)):
+            if j in used:
+                continue
+            
+            other = sorted_els[j]
+            y1_other = other["bbox"]["y1"]
+            y2_other = other["bbox"]["y2"]
+            y_mid_other = (y1_other + y2_other) / 2.0
+
+            # Si la distancia vertical es mayor a la altura del elemento, ya no puede estar en la misma línea
+            if abs(y_mid_curr - y_mid_other) > max(8.0, h_curr * 0.5):
+                continue
+
+            # Comprobar solapamiento vertical
+            overlap = min(y2_curr, y2_other) - max(y1_curr, y1_other)
+            min_h = min(h_curr, y2_other - y1_other)
+            
+            if (min_h > 0 and overlap / min_h >= 0.4) or abs(y_mid_curr - y_mid_other) <= 6.0:
+                current_cluster.append(other)
+                used.add(j)
+
+        clusters.append(current_cluster)
+
+    processed_elements: List[Dict[str, Any]] = []
+
+    for cluster in clusters:
+        if len(cluster) == 1:
+            processed_elements.append(cluster[0])
+            continue
+
+        # Ordenar los elementos del cluster de izquierda a derecha por X1
+        sorted_cluster = sorted(cluster, key=lambda el: el["bbox"]["x1"])
+        combined_text = " | ".join(el["text"].strip() for el in sorted_cluster if el.get("text", "").strip())
+        
+        # Verificar si la fila combinada contiene un patrón de concepto + importe
+        if match_line_item_pattern(combined_text):
+            row_bbox = compute_bounding_box([el["bbox"] for el in sorted_cluster])
+            sub_lines: List[Dict[str, Any]] = []
+            
+            for el in sorted_cluster:
+                if el.get("text") and el.get("bbox"):
+                    if el.get("lines"):
+                        sub_lines.extend(el["lines"])
+                    else:
+                        sub_lines.append({
+                            "text": el["text"].strip(),
+                            "bbox": el["bbox"]
+                        })
+
+            line_item_obj = {
+                "label": "line_item",
+                "text": combined_text,
+                "bbox": row_bbox,
+                "lines": sub_lines,
+                "table_data": None
+            }
+            processed_elements.append(line_item_obj)
+        else:
+            processed_elements.extend(sorted_cluster)
+
+    # Recombinar con tablas y elementos sin bbox, preservando orden
+    all_final_elements = tables + processed_elements + without_bbox
+    return all_final_elements
 
 def extract_table_data(
     item: Any,
@@ -184,5 +302,10 @@ def extract_layout_pages(
             }
         pages_dict[target_page]["elements"].append(element_obj)
 
+    # 3. Aplicar clustering horizontal a las líneas sueltas de cada página para reconstruir line items
+    for p_num in pages_dict:
+        pages_dict[p_num]["elements"] = cluster_horizontal_line_items(pages_dict[p_num]["elements"])
+
     return [pages_dict[k] for k in sorted(pages_dict.keys())]
+
 
