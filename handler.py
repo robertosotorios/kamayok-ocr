@@ -233,6 +233,12 @@ def handler(event):
 
         # 2. Extraer elementos de la maquetación
         for item, _ in doc.iterate_items():
+            label_str = item.label.value if hasattr(item.label, "value") else str(item.label)
+            
+            # Omitir elementos gráficos puros (imágenes/fotos) para evitar ruido y cajas gigantes
+            if label_str.lower() in ("picture", "figure") or getattr(item, "label", None) == DocItemLabel.PICTURE:
+                continue
+
             text_content = getattr(item, "text", "")
             if not text_content and hasattr(item, "export_to_markdown"):
                 try:
@@ -244,6 +250,10 @@ def handler(event):
                         text_content = ""
                 except Exception:
                     text_content = ""
+
+            # Si el contenido es un placeholder de imagen de Docling, descartarlo
+            if not text_content or text_content.strip().startswith("<!-- 🖼️"):
+                continue
 
             prov = item.prov[0] if getattr(item, "prov", None) else None
             page_num, block_bbox = format_bbox(prov, page_heights)
