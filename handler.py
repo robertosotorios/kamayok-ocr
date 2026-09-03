@@ -86,17 +86,33 @@ def compute_bounding_box(bboxes):
         "y2": round(max(b["y2"] for b in valid_boxes), 2)
     }
 
-def format_bbox(prov, page_heights):
-    """Convierte el bbox de Docling a TOPLEFT (x1, y1, x2, y2)."""
-    if not prov or not getattr(prov, "bbox", None):
+def format_bbox(obj, page_heights, default_page=1):
+    """Convierte el bbox de Docling (de un prov, cell o bbox directo) a TOPLEFT (x1, y1, x2, y2)."""
+    if not obj:
         return None, None
 
-    b = prov.bbox
-    page_num = prov.page_no
+    b = None
+    page_num = default_page
+
+    # Si el objeto tiene atributo bbox (como Prov o TableCell)
+    if hasattr(obj, "bbox") and obj.bbox is not None:
+        b = obj.bbox
+        page_num = getattr(obj, "page_no", default_page) or default_page
+    # Si el objeto es directamente un BoundingBox con coordenadas l, t, r, b
+    elif hasattr(obj, "l") and hasattr(obj, "t"):
+        b = obj
+        page_num = getattr(obj, "page_no", default_page) or default_page
+    elif hasattr(obj, "prov") and obj.prov and len(obj.prov) > 0 and hasattr(obj.prov[0], "bbox"):
+        b = obj.prov[0].bbox
+        page_num = getattr(obj.prov[0], "page_no", default_page) or default_page
+
+    if not b:
+        return None, None
+
     page_h = page_heights.get(page_num)
 
     # Invertir coordenada vertical si el origen del documento es BOTTOMLEFT
-    if str(b.coord_origin).upper() == "BOTTOMLEFT" and page_h:
+    if str(getattr(b, "coord_origin", "")).upper() == "BOTTOMLEFT" and page_h:
         raw_x1, raw_y1 = b.l, page_h - b.t
         raw_x2, raw_y2 = b.r, page_h - b.b
     else:
@@ -270,30 +286,35 @@ def handler(event):
             if is_table and hasattr(item, "data") and hasattr(item.data, "table_cells"):
                 rows_dict = defaultdict(list)
                 for cell in item.data.table_cells:
-                    cell_prov = cell.prov[0] if getattr(cell, "prov", None) else None
-                    _, cell_bbox = format_bbox(cell_prov, page_heights)
+                    _, cell_bbox = format_bbox(cell, page_heights, default_page=page_num or 1)
 
-                    rows_dict[cell.start_row_offset_idx].append({
+                    cell_dict = {
                         "col_start": getattr(cell, "start_col_offset_idx", 0),
                         "col_end": getattr(cell, "end_col_offset_idx", 0),
                         "row_start": getattr(cell, "start_row_offset_idx", 0),
                         "row_end": getattr(cell, "end_row_offset_idx", 0),
                         "text": (cell.text or "").strip() if getattr(cell, "text", None) else "",
-                        "bbox": cell_bbox
-                    })
+                    }
+                    if cell_bbox:
+                        cell_dict["bbox"] = cell_bbox
+
+                    rows_dict[cell.start_row_offset_idx].append(cell_dict)
 
                 structured_rows = []
                 for r_idx in sorted(rows_dict.keys()):
                     cells_in_row = sorted(rows_dict[r_idx], key=lambda c: c["col_start"])
-                    row_bbox = compute_bounding_box([c["bbox"] for c in cells_in_row])
+                    row_bbox = compute_bounding_box([c.get("bbox") for c in cells_in_row if c.get("bbox")])
                     row_text = " | ".join(c["text"] for c in cells_in_row if c["text"])
 
-                    structured_rows.append({
+                    row_dict = {
                         "row_index": r_idx,
                         "text": row_text,
-                        "bbox": row_bbox,
                         "cells": cells_in_row
-                    })
+                    }
+                    if row_bbox:
+                        row_dict["bbox"] = row_bbox
+
+                    structured_rows.append(row_dict)
 
                     # Cada fila de la tabla tiene su propio bbox de fila preciso
                     if row_text and row_bbox:
@@ -304,7 +325,7 @@ def handler(event):
 
                     # Cada celda individual tiene su propio bbox de celda
                     for c in cells_in_row:
-                        if c["text"] and c["bbox"]:
+                        if c.get("text") and c.get("bbox"):
                             lines.append({
                                 "text": c["text"],
                                 "bbox": c["bbox"]
