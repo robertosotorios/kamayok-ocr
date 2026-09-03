@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional
 from docling_core.types.doc.labels import DocItemLabel
 
-from core.geometry import format_bbox, compute_bounding_box
+from core.geometry import format_bbox, compute_bounding_box, tokenize_text_to_spatial_tokens
 from core.sanitizer import fix_split_accents
 
 # Regex para detectar formatos numéricos de importe (ej. 1.580,00, 331,80, 45.00, 100€)
@@ -22,10 +22,14 @@ def match_line_item_pattern(text: str) -> bool:
     has_price = is_price_or_amount(text)
     return has_letters and has_price
 
-def cluster_horizontal_line_items(elements: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def cluster_horizontal_line_items(
+    elements: List[Dict[str, Any]],
+    id_counter: Dict[str, int]
+) -> List[Dict[str, Any]]:
     """
     Agrupa fragmentos de texto en la misma franja horizontal (Y similar) que formen
     líneas de factura con concepto e importes/precios (ej: 'Concepto' + 'Cant' + 'Precio' + 'Total').
+    Preserva los token_ids inmutables de cada fragmento.
     """
     if not elements or len(elements) <= 1:
         return elements
@@ -100,22 +104,30 @@ def cluster_horizontal_line_items(elements: List[Dict[str, Any]]) -> List[Dict[s
         if match_line_item_pattern(combined_text):
             row_bbox = compute_bounding_box([el["bbox"] for el in sorted_cluster])
             sub_lines: List[Dict[str, Any]] = []
+            combined_token_ids: List[str] = []
             
             for el in sorted_cluster:
+                if el.get("token_ids"):
+                    combined_token_ids.extend(el["token_ids"])
                 if el.get("text") and el.get("bbox"):
                     if el.get("lines"):
                         sub_lines.extend(el["lines"])
                     else:
                         sub_lines.append({
+                            "line_id": el.get("block_id") or f"l_{id_counter.get('line', 0)}",
                             "text": el["text"].strip(),
-                            "bbox": el["bbox"]
+                            "bbox": el["bbox"],
+                            "token_ids": el.get("token_ids", [])
                         })
 
+            id_counter["block"] = id_counter.get("block", 0) + 1
             line_item_obj = {
+                "block_id": f"b_{id_counter['block']}",
                 "label": "line_item",
                 "text": combined_text,
                 "bbox": row_bbox,
                 "lines": sub_lines,
+                "token_ids": combined_token_ids,
                 "table_data": None
             }
             processed_elements.append(line_item_obj)
@@ -131,21 +143,37 @@ def extract_table_data(
     block_bbox: Optional[Dict[str, float]],
     page_num: int,
     page_heights: Dict[int, Optional[float]],
+    id_counter: Dict[str, int],
+    all_tokens_collector: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
-    """Extrae filas jerárquicas y celdas individuales con sus respectivos bounding boxes, omitiendo el texto global de la tabla."""
+    """
+    Fase 2: Reconstrucción estructural de tablas jerárquicas con Celdas y Filas.
+    Asigna IDs inmutables a cada Celda (cell_id), Fila (row_id) y asocia sus listas de token_ids.
+    """
     rows_dict = defaultdict(list)
     lines: List[Dict[str, Any]] = []
+    table_token_ids: List[str] = []
 
     for cell in item.data.table_cells:
         _, cell_bbox = format_bbox(cell, page_heights, default_page=page_num or 1)
         cell_text = fix_split_accents((cell.text or "").strip()) if getattr(cell, "text", None) else ""
         
+        # Tokenizar la celda y recolectar sus tokens inmutables
+        c_tok_ids, c_tokens = tokenize_text_to_spatial_tokens(cell_text, cell_bbox, page_num, id_counter)
+        all_tokens_collector.extend(c_tokens)
+        table_token_ids.extend(c_tok_ids)
+
+        id_counter["cell"] = id_counter.get("cell", 0) + 1
+        cell_id = f"c_{id_counter['cell']}"
+
         cell_dict = {
+            "cell_id": cell_id,
             "col_start": getattr(cell, "start_col_offset_idx", 0),
             "col_end": getattr(cell, "end_col_offset_idx", 0),
             "row_start": getattr(cell, "start_row_offset_idx", 0),
             "row_end": getattr(cell, "end_row_offset_idx", 0),
             "text": cell_text,
+            "token_ids": c_tok_ids,
         }
         if cell_bbox:
             cell_dict["bbox"] = cell_bbox
@@ -157,51 +185,72 @@ def extract_table_data(
         cells_in_row = sorted(rows_dict[r_idx], key=lambda c: c["col_start"])
         row_bbox = compute_bounding_box([c.get("bbox") for c in cells_in_row if c.get("bbox")])
         row_text = fix_split_accents(" | ".join(c["text"] for c in cells_in_row if c["text"]))
+        
+        row_token_ids: List[str] = []
+        for c in cells_in_row:
+            row_token_ids.extend(c.get("token_ids", []))
+
+        id_counter["row"] = id_counter.get("row", 0) + 1
+        row_id = f"r_{id_counter['row']}"
 
         row_dict = {
+            "row_id": row_id,
             "row_index": r_idx,
             "text": row_text,
-            "cells": cells_in_row
+            "cells": cells_in_row,
+            "token_ids": row_token_ids
         }
         if row_bbox:
             row_dict["bbox"] = row_bbox
 
         structured_rows.append(row_dict)
 
-        # Cada fila de la tabla tiene su propio bbox de fila preciso
+        # Fila de tabla en lines
         if row_text and row_bbox:
             lines.append({
+                "line_id": row_id,
                 "text": row_text,
-                "bbox": row_bbox
+                "bbox": row_bbox,
+                "token_ids": row_token_ids
             })
 
-        # Cada celda individual tiene su propio bbox de celda
+        # Celdas individuales en lines
         for c in cells_in_row:
             if c.get("text") and c.get("bbox"):
                 lines.append({
+                    "line_id": c["cell_id"],
                     "text": c["text"],
-                    "bbox": c["bbox"]
+                    "bbox": c["bbox"],
+                    "token_ids": c.get("token_ids", [])
                 })
 
     table_data = {
         "bbox": block_bbox,
         "num_rows": getattr(item.data, "num_rows", len(structured_rows)),
         "num_cols": getattr(item.data, "num_cols", None),
-        "rows": structured_rows
+        "rows": structured_rows,
+        "token_ids": table_token_ids
     }
 
     return {
         "table_data": table_data,
-        "lines": lines
+        "lines": lines,
+        "token_ids": table_token_ids
     }
 
 def extract_layout_pages(
     doc: Any,
     tmp_path: Optional[str]
-) -> List[Dict[str, Any]]:
-    """Extrae la estructura de páginas y elementos de layout de Docling."""
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Extrae la estructura de páginas, elementos de layout, y el catálogo plano de tokens
+    espaciales inmutables (Fase 1 y Fase 2).
+    Retorna (sorted_pages, all_tokens).
+    """
     pages_dict: Dict[int, Dict[str, Any]] = {}
     page_heights: Dict[int, Optional[float]] = {}
+    id_counter: Dict[str, int] = {"token": 0, "cell": 0, "row": 0, "line": 0, "block": 0}
+    all_tokens: List[Dict[str, Any]] = []
     
     # 1. Mapear dimensiones de cada página
     if hasattr(doc, "pages") and doc.pages:
@@ -260,31 +309,54 @@ def extract_layout_pages(
         )
 
         lines: List[Dict[str, Any]] = []
+        element_token_ids: List[str] = []
 
         if is_table and hasattr(item, "data") and hasattr(item.data, "table_cells"):
-            extracted = extract_table_data(item, block_bbox, current_page, page_heights)
+            extracted = extract_table_data(item, block_bbox, current_page, page_heights, id_counter, all_tokens)
             table_data = extracted["table_data"]
             lines = extracted["lines"]
+            element_token_ids = extracted.get("token_ids", [])
         elif hasattr(item, "prov") and len(item.prov) > 1:
             # Párrafo o bloque con múltiples cajas sub-prov
             for sub_prov in item.prov:
                 _, sub_bbox = format_bbox(sub_prov, page_heights)
+                sub_text = fix_split_accents(getattr(sub_prov, "text", None) or text_content)
+                s_tok_ids, s_tokens = tokenize_text_to_spatial_tokens(sub_text, sub_bbox, current_page, id_counter)
+                all_tokens.extend(s_tokens)
+                element_token_ids.extend(s_tok_ids)
+
+                id_counter["line"] = id_counter.get("line", 0) + 1
                 lines.append({
-                    "text": fix_split_accents(getattr(sub_prov, "text", None) or text_content),
-                    "bbox": sub_bbox
+                    "line_id": f"l_{id_counter['line']}",
+                    "text": sub_text,
+                    "bbox": sub_bbox,
+                    "token_ids": s_tok_ids
                 })
         elif text_content:
             # Bloque de texto estándar
+            clean_txt = text_content.strip()
+            b_tok_ids, b_tokens = tokenize_text_to_spatial_tokens(clean_txt, block_bbox, current_page, id_counter)
+            all_tokens.extend(b_tokens)
+            element_token_ids.extend(b_tok_ids)
+
+            id_counter["line"] = id_counter.get("line", 0) + 1
             lines.append({
-                "text": text_content.strip(),
-                "bbox": block_bbox
+                "line_id": f"l_{id_counter['line']}",
+                "text": clean_txt,
+                "bbox": block_bbox,
+                "token_ids": b_tok_ids
             })
 
+        id_counter["block"] = id_counter.get("block", 0) + 1
+        block_id = f"b_{id_counter['block']}"
+
         element_obj = {
+            "block_id": block_id,
             "label": label_str,
             "text": "" if is_table else text_content,
             "bbox": block_bbox,
             "lines": lines,
+            "token_ids": element_token_ids,
             "table_data": table_data
         }
 
@@ -302,8 +374,9 @@ def extract_layout_pages(
 
     # 3. Aplicar clustering horizontal a las líneas sueltas de cada página para reconstruir line items
     for p_num in pages_dict:
-        pages_dict[p_num]["elements"] = cluster_horizontal_line_items(pages_dict[p_num]["elements"])
+        pages_dict[p_num]["elements"] = cluster_horizontal_line_items(pages_dict[p_num]["elements"], id_counter)
 
-    return [pages_dict[k] for k in sorted(pages_dict.keys())]
+    sorted_pages = [pages_dict[k] for k in sorted(pages_dict.keys())]
+    return sorted_pages, all_tokens
 
 

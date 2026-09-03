@@ -57,8 +57,8 @@ def handler(event):
         # 2. Corregir el árbol del documento Docling (fusionar tildes/acentos separados por EasyOCR)
         sanitize_docling_document(doc)
 
-        # 3. Extraer páginas y elementos estructurados (tablas, filas, celdas, bloques)
-        sorted_pages = extract_layout_pages(doc, tmp_path)
+        # 3. Extraer páginas, elementos estructurados (tablas, filas, celdas, bloques) y tokens inmutables
+        sorted_pages, tokens = extract_layout_pages(doc, tmp_path)
 
         # 4. Extracción de códigos QR (VeriFactu / TicketBAI)
         qr_codes = extract_qr_codes(doc, tmp_path)
@@ -70,6 +70,7 @@ def handler(event):
             "status": "success",
             "markdown": clean_md,
             "qr_codes": qr_codes,
+            "tokens": tokens,
             "pages": sorted_pages
         }
 

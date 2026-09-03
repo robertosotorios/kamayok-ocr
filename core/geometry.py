@@ -73,3 +73,58 @@ def format_bbox(obj: Any, page_heights: Dict[int, Optional[float]], default_page
     }
     return page_num, bbox
 
+def tokenize_text_to_spatial_tokens(
+    text: str,
+    bbox: Optional[Dict[str, float]],
+    page: int,
+    id_counter: Dict[str, int]
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """
+    Fase 1: Tokenización espacial inmutable.
+    Divide una cadena en tokens atómicos (palabras, números, símbolos), asignando a cada
+    uno un token_id único global inmutable (t_101, t_102...) y calculando su bounding box proporcional.
+    """
+    import re
+    if not text or not text.strip():
+        return [], []
+
+    token_ids: List[str] = []
+    tokens_list: List[Dict[str, Any]] = []
+
+    matches = list(re.finditer(r'\S+', text))
+    if not matches:
+        return [], []
+
+    total_len = max(len(text), 1)
+
+    for m in matches:
+        token_str = m.group()
+        id_counter["token"] = id_counter.get("token", 0) + 1
+        tok_id = f"t_{id_counter['token']}"
+        token_ids.append(tok_id)
+
+        tok_bbox = None
+        if bbox and "x1" in bbox and "x2" in bbox:
+            x1 = bbox["x1"]
+            x2 = bbox["x2"]
+            y1 = bbox["y1"]
+            y2 = bbox["y2"]
+            width = x2 - x1
+            tok_x1 = round(x1 + (m.start() / total_len) * width, 2)
+            tok_x2 = round(x1 + (m.end() / total_len) * width, 2)
+            tok_bbox = {
+                "x1": min(tok_x1, tok_x2),
+                "y1": y1,
+                "x2": max(tok_x1, tok_x2),
+                "y2": y2
+            }
+
+        tokens_list.append({
+            "id": tok_id,
+            "text": token_str,
+            "bbox": tok_bbox,
+            "page": page
+        })
+
+    return token_ids, tokens_list
+
