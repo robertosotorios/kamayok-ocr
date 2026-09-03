@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Instalar PyTorch con soporte nativo para CUDA 12.8 / Blackwell (sm_100, sm_120) y librerías OCR
 RUN pip uninstall -y torchaudio || true \
-    && pip install --no-cache-dir --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 \
+    && (pip install --no-cache-dir --upgrade --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 || pip install --no-cache-dir --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128) \
     && pip install --no-cache-dir runpod docling easyocr rapidocr-onnxruntime opencv-python-headless pypdfium2
 
 # PRE-DESCARGA: Cachear pesos de Docling y modelos OCR (español e inglés) en /root/.cache

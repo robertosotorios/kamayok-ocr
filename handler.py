@@ -9,7 +9,7 @@ import runpod
 from fastapi import FastAPI, Request
 import uvicorn
 
-from core.config import converter, cuda_available
+from core.config import converter, cpu_converter, cuda_available
 from core.geometry import detect_file_extension
 from core.sanitizer import sanitize_docling_document, clean_markdown_output
 from core.extractors import extract_layout_pages
@@ -41,9 +41,18 @@ def handler(event):
                 tmp_path = tmp.name
             source = tmp_path
 
-        # 1. Procesar con Docling
-        result = converter.convert(source)
-        doc = result.document
+        # 1. Procesar con Docling (con auto-fallback a CPU si la GPU arroja error de kernel/arquitectura)
+        try:
+            result = converter.convert(source)
+            doc = result.document
+        except Exception as conv_err:
+            err_str = str(conv_err)
+            if "CUDA" in err_str or "kernel image" in err_str or "AcceleratorError" in err_str:
+                print(f"[Docling Worker] ⚠️ Fallo en kernel CUDA ({conv_err}). Ejecutando auto-fallback en CPU...")
+                result = cpu_converter.convert(source)
+                doc = result.document
+            else:
+                raise conv_err
 
         # 2. Corregir el árbol del documento Docling (fusionar tildes/acentos separados por EasyOCR)
         sanitize_docling_document(doc)
