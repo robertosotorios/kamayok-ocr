@@ -211,11 +211,11 @@ def handler(event):
                     _, cell_bbox = format_bbox(cell_prov, page_heights)
 
                     rows_dict[cell.start_row_offset_idx].append({
-                        "col_start": cell.start_col_offset_idx,
-                        "col_end": cell.end_col_offset_idx,
-                        "row_start": cell.start_row_offset_idx,
-                        "row_end": cell.end_row_offset_idx,
-                        "text": cell.text.strip(),
+                        "col_start": getattr(cell, "start_col_offset_idx", 0),
+                        "col_end": getattr(cell, "end_col_offset_idx", 0),
+                        "row_start": getattr(cell, "start_row_offset_idx", 0),
+                        "row_end": getattr(cell, "end_row_offset_idx", 0),
+                        "text": (cell.text or "").strip() if getattr(cell, "text", None) else "",
                         "bbox": cell_bbox
                     })
 
