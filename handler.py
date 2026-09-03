@@ -36,16 +36,17 @@ pipeline_options.accelerator_options = AcceleratorOptions(
 )
 pipeline_options.do_table_structure = True
 pipeline_options.do_ocr = True
+pipeline_options.images_scale = 2.0
 
-# Forzar el motor de OCR a utilizar la GPU si está disponible
+# Forzar el motor de OCR a procesar páginas completas (evita saltarse texto escaneado/imágenes)
 if cuda_available:
     try:
-        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=True, lang=["es", "en"])
+        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=True, lang=["es", "en"], force_full_page_ocr=True)
     except Exception as e:
         print(f"[Docling Worker] Nota: Configurando OCR por defecto con GPU ({e})")
 else:
     try:
-        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=False, lang=["es", "en"])
+        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=False, lang=["es", "en"], force_full_page_ocr=True)
     except Exception as e:
         pass
 
