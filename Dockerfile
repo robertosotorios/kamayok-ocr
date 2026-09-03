@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir runpod docling easyocr rapidocr-onnxruntime openc
 # PRE-DESCARGA: Cachear pesos de Docling y modelos OCR (español e inglés) en /root/.cache
 RUN python3 -c "import easyocr; easyocr.Reader(['es', 'en'], gpu=False, download_enabled=True); from docling.document_converter import DocumentConverter; DocumentConverter()"
 
-# Copiar el script que atiende las peticiones de RunPod
+# Copiar el código fuente y módulos del microservicio
+COPY core/ /core/
 COPY handler.py /handler.py
 
 EXPOSE 80 8000
