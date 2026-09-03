@@ -262,4 +262,63 @@ def handler(event):
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-runpod.serverless.start({"handler": handler})
+
+# =============================================================================
+# Soporte para RunPod Load Balancer (HTTP Server + /ping) y Serverless clásico
+# =============================================================================
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uvicorn
+
+app = FastAPI(title="Docling RunPod Service")
+
+@app.get("/ping")
+@app.get("/health")
+def ping():
+    return {
+        "status": "healthy",
+        "cuda_available": cuda_available,
+        "gpu_model": torch.cuda.get_device_name(0) if cuda_available else "CPU"
+    }
+
+@app.post("/runsync")
+@app.post("/")
+async def runsync_endpoint(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = handler(body)
+    return {
+        "status": "COMPLETED",
+        "output": result
+    }
+
+@app.post("/run")
+async def run_endpoint(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    result = handler(body)
+    return {
+        "id": "job-direct",
+        "status": "COMPLETED",
+        "output": result
+    }
+
+if __name__ == "__main__":
+    port_env = os.environ.get("PORT")
+    port_health_env = os.environ.get("PORT_HEALTH")
+
+    # Si RunPod se ejecuta como Load Balancer o tiene la variable PORT configurada
+    if port_env or port_health_env or os.environ.get("RUNPOD_HTTP_SERVER") == "1":
+        port = int(port_env or port_health_env or 8000)
+        print(f"[Docling Worker] 🚀 Servidor HTTP Load Balancer activo en puerto {port} (Endpoint de salud: /ping)")
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    else:
+        # Modo RunPod Serverless estándar (Job Queue)
+        print("[Docling Worker] 🚀 RunPod Serverless Worker activo (Job Queue)")
+        runpod.serverless.start({"handler": handler})
+
