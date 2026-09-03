@@ -166,7 +166,15 @@ def handler(event):
         for item, _ in doc.iterate_items():
             text_content = getattr(item, "text", "")
             if not text_content and hasattr(item, "export_to_markdown"):
-                text_content = item.export_to_markdown()
+                try:
+                    text_content = item.export_to_markdown(doc=doc)
+                except TypeError:
+                    try:
+                        text_content = item.export_to_markdown()
+                    except Exception:
+                        text_content = ""
+                except Exception:
+                    text_content = ""
 
             prov = item.prov[0] if getattr(item, "prov", None) else None
             page_num, block_bbox = format_bbox(prov, page_heights)
