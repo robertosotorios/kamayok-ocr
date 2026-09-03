@@ -357,7 +357,7 @@ def handler(event):
 
             element_obj = {
                 "label": item.label.value if hasattr(item.label, "value") else str(item.label),
-                "text": text_content,
+                "text": "" if is_table else text_content,
                 "bbox": block_bbox,
                 "lines": lines,
                 "table_data": table_data
