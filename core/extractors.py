@@ -131,9 +131,8 @@ def extract_table_data(
     block_bbox: Optional[Dict[str, float]],
     page_num: int,
     page_heights: Dict[int, Optional[float]],
-    text_content: str
 ) -> Dict[str, Any]:
-    """Extrae filas jerárquicas y celdas individuales con sus respectivos bounding boxes."""
+    """Extrae filas jerárquicas y celdas individuales con sus respectivos bounding boxes, omitiendo el texto global de la tabla."""
     rows_dict = defaultdict(list)
     lines: List[Dict[str, Any]] = []
 
@@ -185,7 +184,6 @@ def extract_table_data(
                 })
 
     table_data = {
-        "text": text_content,
         "bbox": block_bbox,
         "num_rows": getattr(item.data, "num_rows", len(structured_rows)),
         "num_cols": getattr(item.data, "num_cols", None),
@@ -264,7 +262,7 @@ def extract_layout_pages(
         lines: List[Dict[str, Any]] = []
 
         if is_table and hasattr(item, "data") and hasattr(item.data, "table_cells"):
-            extracted = extract_table_data(item, block_bbox, current_page, page_heights, text_content)
+            extracted = extract_table_data(item, block_bbox, current_page, page_heights)
             table_data = extracted["table_data"]
             lines = extracted["lines"]
         elif hasattr(item, "prov") and len(item.prov) > 1:
