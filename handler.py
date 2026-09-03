@@ -38,9 +38,14 @@ pipeline_options.do_ocr = True
 # Forzar el motor de OCR a utilizar la GPU si está disponible
 if cuda_available:
     try:
-        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=True)
+        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=True, lang=["es", "en"])
     except Exception as e:
         print(f"[Docling Worker] Nota: Configurando OCR por defecto con GPU ({e})")
+else:
+    try:
+        pipeline_options.ocr_options = EasyOcrOptions(use_gpu=False, lang=["es", "en"])
+    except Exception as e:
+        pass
 
 # 2. Inicialización de conversores soportando PDF y formatos de imagen (incluyendo WebP)
 converter = DocumentConverter(
