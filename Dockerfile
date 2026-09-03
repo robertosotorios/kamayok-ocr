@@ -20,4 +20,6 @@ RUN python3 -c "import easyocr; easyocr.Reader(['es', 'en'], gpu=False, download
 # Copiar el script que atiende las peticiones de RunPod
 COPY handler.py /handler.py
 
+EXPOSE 80 8000
+
 CMD ["python3", "-u", "/handler.py"]

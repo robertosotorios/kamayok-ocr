@@ -120,7 +120,6 @@ def extract_qr_codes(doc, tmp_path):
         if img_bgr is None or img_bgr.size == 0:
             return
         try:
-            # Detección simple y múltiple de QRs
             success, decoded_info, points, _ = detector.detectAndDecodeMulti(img_bgr)
             if success and decoded_info:
                 for text in decoded_info:
@@ -408,4 +407,3 @@ if __name__ == "__main__":
         # Modo RunPod Serverless estándar (Job Queue)
         print("[Docling Worker] 🚀 RunPod Serverless Worker activo (Job Queue)")
         runpod.serverless.start({"handler": handler})
-
