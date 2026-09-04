@@ -54,6 +54,25 @@ def handler(event):
         source = tmp_path
         print(f"[Docling Worker] 📄 Archivo listo en {tmp_path} ({len(file_bytes) / 1024:.1f} KB). Iniciando Docling...", flush=True)
 
+        # Preprocesamiento: rasterizado a 300 DPI si se activa force_rasterize o FORCE_RASTERIZE=true
+        rasterized_tmp = None
+        force_rast = job_input.get("force_rasterize", False) or os.environ.get("FORCE_RASTERIZE", "").lower() in ("1", "true", "yes")
+        if ext == ".pdf" and force_rast:
+            try:
+                import pypdfium2 as pdfium
+                pdf_doc = pdfium.PdfDocument(tmp_path)
+                if len(pdf_doc) == 1:
+                    print("[Docling Worker] 🖼️ Rasterizando PDF a PNG de 300 DPI antes de conversión...", flush=True)
+                    page = pdf_doc[0]
+                    bitmap = page.render(scale=4.166667)
+                    pil_image = bitmap.to_pil()
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as r_tmp:
+                        pil_image.save(r_tmp.name, format="PNG")
+                        rasterized_tmp = r_tmp.name
+                        source = rasterized_tmp
+            except Exception as r_err:
+                print(f"[Docling Worker] ⚠️ Advertencia en rasterizado previo: {r_err}", flush=True)
+
         # 1. Procesar con Docling (con auto-fallback a CPU si la GPU arroja error de kernel/arquitectura)
         try:
             result = converter.convert(source)
@@ -72,13 +91,17 @@ def handler(event):
         sanitize_docling_document(doc)
 
         # 3. Extraer páginas, elementos estructurados (tablas, filas, celdas, bloques) y tokens inmutables
-        sorted_pages, tokens = extract_layout_pages(doc, tmp_path)
+        sorted_pages, tokens = extract_layout_pages(doc, source)
 
         # 4. Extracción de códigos QR (VeriFactu / TicketBAI)
-        qr_codes = extract_qr_codes(doc, tmp_path)
+        qr_codes = extract_qr_codes(doc, source)
 
-        # 5. Limpieza y normalización de Markdown
-        clean_md = clean_markdown_output(doc.export_to_markdown())
+        # 5. Limpieza y normalización de Markdown (con traverse_pictures=True para incluir texto en cajas gráficas)
+        try:
+            raw_md = doc.export_to_markdown(traverse_pictures=True)
+        except TypeError:
+            raw_md = doc.export_to_markdown()
+        clean_md = clean_markdown_output(raw_md)
 
         print(f"[Docling Worker] ✅ Procesamiento exitoso: {len(sorted_pages)} páginas, {len(tokens)} tokens, {len(qr_codes)} QR(s)", flush=True)
 
@@ -101,11 +124,12 @@ def handler(event):
         }
 
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+        for p in (tmp_path, rasterized_tmp):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

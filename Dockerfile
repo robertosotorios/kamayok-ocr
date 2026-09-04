@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Instalar dependencias Python (utilizando PyTorch 2.6.0 estable nativo para Ampere sm_86 y Ada sm_89)
 RUN pip install --no-cache-dir runpod docling easyocr rapidocr-onnxruntime opencv-python-headless pypdfium2 requests fastapi uvicorn
 
-# PRE-DESCARGA: Cachear pesos de Docling y modelos OCR (español e inglés) en /root/.cache
-RUN python3 -c "import easyocr; easyocr.Reader(['es', 'en'], gpu=False, download_enabled=True); from docling.document_converter import DocumentConverter; DocumentConverter()"
+# PRE-DESCARGA: Cachear pesos de Docling y modelos OCR (RapidOCR + EasyOCR en español e inglés) en /root/.cache
+RUN python3 -c "from rapidocr_onnxruntime import RapidOCR; RapidOCR(); import easyocr; easyocr.Reader(['es', 'en'], gpu=False, download_enabled=True); from docling.document_converter import DocumentConverter; DocumentConverter()"
 
 # Copiar el código fuente y módulos del microservicio
 COPY core/ /core/

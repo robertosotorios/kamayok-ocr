@@ -272,15 +272,26 @@ def extract_layout_pages(
                 "elements": []
             }
 
-    # 2. Extraer elementos de la maquetación
-    for item, _ in doc.iterate_items():
+    # 2. Extraer elementos de la maquetación (con soporte de traverse_pictures para no perder texto en cajas gráficas)
+    try:
+        items_iterator = doc.iterate_items(traverse_pictures=True)
+    except TypeError:
+        items_iterator = doc.iterate_items()
+
+    for item, _ in items_iterator:
         label_str = item.label.value if hasattr(item.label, "value") else str(item.label)
-        
-        # Omitir elementos gráficos puros (imágenes/fotos) para evitar ruido y cajas gigantes
-        if label_str.lower() in ("picture", "figure") or getattr(item, "label", None) == DocItemLabel.PICTURE:
-            continue
+        is_picture = (
+            label_str.lower() in ("picture", "figure") or 
+            getattr(item, "label", None) == DocItemLabel.PICTURE
+        )
 
         text_content = getattr(item, "text", "")
+        if not text_content and hasattr(item, "caption_text"):
+            try:
+                text_content = item.caption_text(doc=doc)
+            except Exception:
+                text_content = ""
+
         if not text_content and hasattr(item, "export_to_markdown"):
             try:
                 text_content = item.export_to_markdown(doc=doc)
@@ -292,21 +303,32 @@ def extract_layout_pages(
             except Exception:
                 text_content = ""
 
-        text_content = fix_split_accents(text_content)
+        text_content = fix_split_accents(text_content or "")
 
-        # Si el contenido es un placeholder de imagen de Docling, descartarlo
-        if not text_content or text_content.strip().startswith("<!-- 🖼️"):
-            continue
+        # Si es un contenedor de imagen y carece de texto real legible o es un placeholder gráfico, descartarlo
+        is_placeholder = (
+            not text_content or 
+            text_content.strip().startswith("<!-- 🖼️") or 
+            text_content.strip().startswith("<!-- image")
+        )
 
-        prov = item.prov[0] if getattr(item, "prov", None) else None
-        page_num, block_bbox = format_bbox(prov, page_heights)
-        current_page = page_num or 1
-
-        table_data = None
         is_table = (
             getattr(item, "label", None) == DocItemLabel.TABLE or 
             str(getattr(item, "label", "")).lower() == "table"
         )
+        has_table_cells = is_table and hasattr(item, "data") and hasattr(item.data, "table_cells")
+
+        if is_placeholder and not has_table_cells:
+            continue
+
+        # Si un elemento gráfico contenía texto real, reclasificar su etiqueta como texto para maquetación
+        if is_picture and text_content and not is_placeholder:
+            label_str = "text"
+
+        prov = item.prov[0] if getattr(item, "prov", None) else None
+        page_num, block_bbox = format_bbox(prov, page_heights)
+        current_page = page_num or 1
+        table_data = None
 
         lines: List[Dict[str, Any]] = []
         element_token_ids: List[str] = []
