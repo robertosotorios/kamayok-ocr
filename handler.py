@@ -15,6 +15,7 @@ from core.geometry import detect_file_extension
 from core.sanitizer import sanitize_docling_document, clean_markdown_output
 from core.extractors import extract_layout_pages
 from core.qr_scanner import extract_qr_codes
+from core.margin_recovery import recover_missing_margin_content
 
 def handler(event):
     """
@@ -102,6 +103,12 @@ def handler(event):
         except TypeError:
             raw_md = doc.export_to_markdown()
         clean_md = clean_markdown_output(raw_md)
+
+        # 6. Recuperación de textos marginales y verticales (CIFs, datos registrales y notas legales en bordes)
+        id_counter = {"token": len(tokens), "line": len(tokens), "block": 500}
+        clean_md, sorted_pages, tokens = recover_missing_margin_content(
+            sorted_pages, tokens, clean_md, source, id_counter
+        )
 
         print(f"[Docling Worker] ✅ Procesamiento exitoso: {len(sorted_pages)} páginas, {len(tokens)} tokens, {len(qr_codes)} QR(s)", flush=True)
 
