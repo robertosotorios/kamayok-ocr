@@ -2,8 +2,10 @@
 Servicio OCR Docling + EasyOCR para RunPod Serverless y Load Balancers HTTP.
 """
 import os
+import sys
 import base64
 import tempfile
+import traceback
 import torch
 import runpod
 from fastapi import FastAPI, Request
@@ -47,8 +49,9 @@ def handler(event):
             doc = result.document
         except Exception as conv_err:
             err_str = str(conv_err)
+            print(f"[Docling Worker] ⚠️ Advertencia en conversión GPU: {err_str}", flush=True)
             if "CUDA" in err_str or "kernel image" in err_str or "AcceleratorError" in err_str:
-                print(f"[Docling Worker] ⚠️ Fallo en kernel CUDA ({conv_err}). Ejecutando auto-fallback en CPU...")
+                print(f"[Docling Worker] ⚠️ Ejecutando auto-fallback en CPU...", flush=True)
                 result = cpu_converter.convert(source)
                 doc = result.document
             else:
@@ -75,7 +78,9 @@ def handler(event):
         }
 
     except Exception as e:
-        return {"error": str(e), "status": "failed"}
+        traceback.print_exc()
+        print(f"[Docling Worker] ❌ Error procesando documento: {e}", flush=True)
+        return {"error": str(e), "traceback": traceback.format_exc(), "status": "failed"}
 
     finally:
         if tmp_path and os.path.exists(tmp_path):

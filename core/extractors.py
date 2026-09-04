@@ -3,7 +3,7 @@ Extracción estructurada de tablas jerárquicas (filas y celdas), clustering hor
 """
 import re
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from docling_core.types.doc.labels import DocItemLabel
 
 from core.geometry import format_bbox, compute_bounding_box, tokenize_text_to_spatial_tokens

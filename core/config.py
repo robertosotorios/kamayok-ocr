@@ -15,17 +15,17 @@ from docling.datamodel.base_models import InputFormat
 cuda_available = torch.cuda.is_available()
 device = AcceleratorDevice.CUDA if cuda_available else AcceleratorDevice.CPU
 
-print(f"[Docling Worker] CUDA Available: {cuda_available}")
+print(f"[Docling Worker] CUDA Available: {cuda_available}", flush=True)
 if cuda_available:
     cap = torch.cuda.get_device_capability(0)
-    print(f"[Docling Worker] GPU Model: {torch.cuda.get_device_name(0)} (Compute Capability: {cap[0]}.{cap[1]})")
-    print(f"[Docling Worker] GPU Count: {torch.cuda.device_count()}")
-    print(f"[Docling Worker] VRAM Total: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
+    print(f"[Docling Worker] GPU Model: {torch.cuda.get_device_name(0)} (Compute Capability: {cap[0]}.{cap[1]})", flush=True)
+    print(f"[Docling Worker] GPU Count: {torch.cuda.device_count()}", flush=True)
+    print(f"[Docling Worker] VRAM Total: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB", flush=True)
     arch_list = getattr(torch.cuda, "get_arch_list", lambda: [])()
     if arch_list:
-        print(f"[Docling Worker] Supported CUDA Archs: {', '.join(arch_list)}")
+        print(f"[Docling Worker] Supported CUDA Archs: {', '.join(arch_list)}", flush=True)
 else:
-    print("[Docling Worker] ⚠️ ADVERTENCIA: CUDA no detectado. Ejecutando en CPU fallback.")
+    print("[Docling Worker] ⚠️ ADVERTENCIA: CUDA no detectado. Ejecutando en CPU fallback.", flush=True)
 
 # 1. Configuración de Pipeline con aceleración por GPU
 gpu_pipeline_options = PdfPipelineOptions()
@@ -43,9 +43,9 @@ if cuda_available:
         test_t = torch.zeros((1,), device="cuda")
         _ = test_t + 1
         gpu_pipeline_options.ocr_options = EasyOcrOptions(use_gpu=True, lang=["es", "en"], force_full_page_ocr=True)
-        print(f"[Docling Worker] ✅ EasyOCR configurado con GPU activa ({torch.cuda.get_device_name(0)})")
+        print(f"[Docling Worker] ✅ EasyOCR configurado con GPU activa ({torch.cuda.get_device_name(0)})", flush=True)
     except Exception as e:
-        print(f"[Docling Worker] ⚠️ Advertencia en inicialización GPU ({e}). Activando CPU fallback.")
+        print(f"[Docling Worker] ⚠️ Advertencia en inicialización GPU ({e}). Activando CPU fallback.", flush=True)
         gpu_pipeline_options.ocr_options = EasyOcrOptions(use_gpu=False, lang=["es", "en"], force_full_page_ocr=True)
 else:
     gpu_pipeline_options.ocr_options = EasyOcrOptions(use_gpu=False, lang=["es", "en"], force_full_page_ocr=True)
