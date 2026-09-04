@@ -1,5 +1,5 @@
 """
-Servicio OCR Docling + EasyOCR optimizado para RunPod Serverless (Job Queue / Webhook).
+Servicio OCR Docling + EasyOCR para RunPod Serverless y pruebas locales/HTTP.
 """
 import os
 import sys
@@ -17,8 +17,13 @@ from core.extractors import extract_layout_pages
 from core.qr_scanner import extract_qr_codes
 
 def handler(event):
-    """Manejador principal de peticiones OCR de RunPod Serverless."""
-    job_input = event.get("input", {})
+    """
+    Manejador principal de peticiones OCR.
+    Compatible tanto con llamadas por cola (/run, /runsync) como directas por HTTP.
+    """
+    job_input = event.get("input", {}) if isinstance(event, dict) else {}
+    if not job_input and isinstance(event, dict) and ("file_base64" in event or "file_url" in event):
+        job_input = event
     
     # Soporte para claves directas o genéricas
     file_url = job_input.get("file_url") or job_input.get("pdf_url") or job_input.get("image_url")
@@ -104,5 +109,41 @@ def handler(event):
 
 
 if __name__ == "__main__":
-    print("[Docling Worker] 🚀 RunPod Serverless Worker iniciado y escuchando la cola de jobs...", flush=True)
-    runpod.serverless.start({"handler": handler})
+    # Si se pasa el flag --http o la variable RUNPOD_HTTP_MODE=true se activa FastAPI para pruebas locales o HTTP directos
+    if "--http" in sys.argv or os.environ.get("RUNPOD_HTTP_MODE", "").lower() in ("1", "true", "yes"):
+        import uvicorn
+        from fastapi import FastAPI, Request
+        
+        app = FastAPI(title="Kamayok OCR Docling Service")
+
+        @app.get("/ping")
+        @app.get("/health")
+        def ping():
+            return {
+                "status": "healthy",
+                "cuda_available": cuda_available,
+                "gpu_model": torch.cuda.get_device_name(0) if cuda_available else "CPU"
+            }
+
+        @app.post("/runsync")
+        @app.post("/run")
+        @app.post("/")
+        async def direct_endpoint(request: Request):
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            event = body if "input" in body else {"input": body}
+            result = handler(event)
+            return {
+                "status": "COMPLETED",
+                "output": result
+            }
+
+        port = int(os.environ.get("PORT", "8000"))
+        print(f"[Docling Worker] 🌐 Servidor HTTP FastAPI activo en puerto {port}...", flush=True)
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    else:
+        # Modo RunPod Serverless estándar: RunPod gestiona automáticamente colas (/run), webhooks y llamadas síncronas (/runsync)
+        print("[Docling Worker] 🚀 RunPod Serverless Worker activo (Soporta /run con Webhook y /runsync síncrono nativamente)...", flush=True)
+        runpod.serverless.start({"handler": handler})
