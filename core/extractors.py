@@ -9,8 +9,8 @@ from docling_core.types.doc.labels import DocItemLabel
 from core.geometry import format_bbox, compute_bounding_box, tokenize_text_to_spatial_tokens
 from core.sanitizer import fix_split_accents
 
-# Regex para detectar formatos numéricos de importe (ej. 1.580,00, 331,80, 45.00, 100€)
-PRICE_REGEX = re.compile(r'\b\d{1,3}(?:\.\d{3})*,\d{2}\s*€?\b|\b\d+\.\d{2}\s*€?\b')
+# Regex para detectar formatos numéricos de importe (ej. 1.580,00, 331,80, 45.00, 38,8429, -4,1322, 100€)
+PRICE_REGEX = re.compile(r'-?\b\d{1,3}(?:\.\d{3})*,\d{2,4}\s*€?\b|-?\b\d+\.\d{2,4}\s*€?\b')
 
 def is_price_or_amount(text: str) -> bool:
     """Detecta si un texto contiene un formato de importe o precio con decimales."""
@@ -371,11 +371,11 @@ def extract_layout_pages(
 
         id_counter["block"] = id_counter.get("block", 0) + 1
         block_id = f"b_{id_counter['block']}"
-
+        table_text = "\n".join(l["text"] for l in lines if l.get("text")) if lines else text_content
         element_obj = {
             "block_id": block_id,
             "label": label_str,
-            "text": "" if is_table else text_content,
+            "text": (table_text or text_content or "") if is_table else text_content,
             "bbox": block_bbox,
             "lines": lines,
             "token_ids": element_token_ids,
