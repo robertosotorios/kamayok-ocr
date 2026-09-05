@@ -69,6 +69,71 @@ def is_text_already_in_markdown(text: str, markdown: str) -> bool:
     return (clean_t[:15] in clean_m) or (clean_t[-15:] in clean_m)
 
 
+def clean_token_word(w: str) -> str:
+    """Limpia puntuación para comparación insensible de tokens."""
+    return re.sub(r'\W+', '', w).lower()
+
+
+def refine_tokens_with_ocr_line(
+    line_text: str,
+    line_bbox: Dict[str, float],
+    page_tokens: List[Dict[str, Any]]
+) -> bool:
+    """
+    Refina la geometría de tokens existentes utilizando la detección exacta de línea de RapidOCR.
+    Evita que tokens en párrafos multilínea queden deformados verticalmente o desplazados horizontalmente.
+    """
+    line_words = [clean_token_word(w) for w in line_text.split() if clean_token_word(w)]
+    if not line_words:
+        return False
+
+    n = len(line_words)
+    line_len = max(len(line_text), 1)
+    w = max(abs(line_bbox["x2"] - line_bbox["x1"]), 1.0)
+    x1 = line_bbox["x1"]
+    y1 = line_bbox["y1"]
+    y2 = line_bbox["y2"]
+
+    for i in range(len(page_tokens) - n + 1):
+        match = True
+        for j in range(n):
+            if clean_token_word(page_tokens[i + j].get("text", "")) != line_words[j]:
+                match = False
+                break
+
+        if match:
+            # Comprobación de plausibilidad espacial si el token ya tenía bbox
+            tok0_bb = page_tokens[i].get("bbox")
+            if tok0_bb and "y1" in tok0_bb and "y2" in tok0_bb:
+                tok_h = abs(tok0_bb["y2"] - tok0_bb["y1"])
+                if abs(tok0_bb["y1"] - y1) > max(tok_h * 2.0, 300.0):
+                    continue
+
+            matched_tokens = page_tokens[i : i + n]
+            curr_pos = 0
+            for tok in matched_tokens:
+                t_str = tok["text"]
+                idx = line_text.find(t_str, curr_pos)
+                if idx == -1:
+                    idx = curr_pos
+                start_c = idx
+                end_c = idx + len(t_str)
+                curr_pos = end_c
+
+                tok_x1 = round(x1 + (start_c / line_len) * w, 2)
+                tok_x2 = round(x1 + (end_c / line_len) * w, 2)
+
+                tok["bbox"] = {
+                    "x1": min(tok_x1, tok_x2),
+                    "y1": y1,
+                    "x2": max(tok_x1, tok_x2),
+                    "y2": y2
+                }
+            return True
+
+    return False
+
+
 def render_page_image(source_path: str, page_num: int = 1) -> Optional[Image.Image]:
     """Renderiza la página del documento a imagen PIL a 300 DPI."""
     if not os.path.exists(source_path):
@@ -246,6 +311,7 @@ def recover_missing_boxes_and_content(
         if not ocr_detections:
             continue
 
+        current_page_tokens = [t for t in tokens if t.get("page") == page_num]
         recovered_elements: List[Dict[str, Any]] = []
 
         for box_pts, raw_text, conf in ocr_detections:
@@ -253,11 +319,7 @@ def recover_missing_boxes_and_content(
             if not line_text or len(line_text) < 2:
                 continue
 
-            # Si el texto ya está presente en el Markdown de Docling, no duplicarlo
-            if is_text_already_in_markdown(line_text, clean_md):
-                continue
-
-            # Convertir coordenadas de píxeles (Top-Left 0,0) a puntos de PDF (Bottom-Left 0,0 en docling)
+            # Convertir coordenadas de píxeles (Top-Left 0,0) a dimensiones de página (Top-Left 0,0)
             min_px_x = min(p[0] for p in box_pts)
             max_px_x = max(p[0] for p in box_pts)
             min_px_y = min(p[1] for p in box_pts)
@@ -265,8 +327,8 @@ def recover_missing_boxes_and_content(
 
             pt_x1 = round(min_px_x / scale_x, 2)
             pt_x2 = round(max_px_x / scale_x, 2)
-            pt_y1 = round(page_h - (max_px_y / scale_y), 2)
-            pt_y2 = round(page_h - (min_px_y / scale_y), 2)
+            pt_y1 = round(min_px_y / scale_y, 2)
+            pt_y2 = round(max_px_y / scale_y, 2)
 
             bbox = {
                 "x1": min(pt_x1, pt_x2),
@@ -274,6 +336,14 @@ def recover_missing_boxes_and_content(
                 "x2": max(pt_x1, pt_x2),
                 "y2": max(pt_y1, pt_y2)
             }
+
+            # 2.1 Refinar geometría de tokens existentes con la detección exacta de OCR de alta resolución
+            if refine_tokens_with_ocr_line(line_text, bbox, current_page_tokens):
+                continue
+
+            # Si el texto ya está presente en el Markdown de Docling, no duplicarlo
+            if is_text_already_in_markdown(line_text, clean_md):
+                continue
 
             # 3. Tokenización espacial inmutable
             tok_ids, tok_list = tokenize_text_to_spatial_tokens(line_text, bbox, page_num, id_counter)

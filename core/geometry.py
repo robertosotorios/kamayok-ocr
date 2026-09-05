@@ -57,8 +57,28 @@ def format_bbox(obj: Any, page_heights: Dict[int, Optional[float]], default_page
 
     page_h = page_heights.get(page_num)
 
-    # Invertir coordenada vertical si el origen del documento es BOTTOMLEFT
-    if str(getattr(b, "coord_origin", "")).upper() == "BOTTOMLEFT" and page_h:
+    # 1. Utilizar método nativo de Docling si está disponible
+    if page_h and hasattr(b, "to_top_left_origin") and callable(b.to_top_left_origin):
+        try:
+            b_tl = b.to_top_left_origin(page_h)
+            return page_num, {
+                "x1": round(min(b_tl.l, b_tl.r), 2),
+                "y1": round(min(b_tl.t, b_tl.b), 2),
+                "x2": round(max(b_tl.l, b_tl.r), 2),
+                "y2": round(max(b_tl.t, b_tl.b), 2)
+            }
+        except Exception:
+            pass
+
+    # 2. Invertir coordenada vertical si el origen del documento es BOTTOMLEFT
+    origin_str = str(getattr(b, "coord_origin", "")).upper()
+    is_bottom_left = (
+        "BOTTOMLEFT" in origin_str
+        or getattr(getattr(b, "coord_origin", None), "name", "") == "BOTTOMLEFT"
+        or (not origin_str and hasattr(b, "l") and hasattr(b, "b") and hasattr(b, "r") and hasattr(b, "t"))
+    )
+
+    if is_bottom_left and page_h:
         raw_x1, raw_y1 = b.l, page_h - b.t
         raw_x2, raw_y2 = b.r, page_h - b.b
     else:
@@ -82,7 +102,8 @@ def tokenize_text_to_spatial_tokens(
     """
     Fase 1: Tokenización espacial inmutable.
     Divide una cadena en tokens atómicos (palabras, números, símbolos), asignando a cada
-    uno un token_id único global inmutable (t_101, t_102...) y calculando su bounding box proporcional.
+    uno un token_id único global inmutable (t_101, t_102...) y calculando su bounding box proporcional,
+    con soporte consciente de líneas para evitar recuadros verticales en párrafos multilínea.
     """
     import re
     if not text or not text.strip():
@@ -91,43 +112,101 @@ def tokenize_text_to_spatial_tokens(
     token_ids: List[str] = []
     tokens_list: List[Dict[str, Any]] = []
 
-    matches = list(re.finditer(r'\S+', text))
-    if not matches:
-        return [], []
+    has_bbox = bool(bbox and "x1" in bbox and "x2" in bbox and "y1" in bbox and "y2" in bbox)
+    if not has_bbox:
+        matches = list(re.finditer(r'\S+', text))
+        for m in matches:
+            token_str = m.group()
+            if len(token_str) > 150 or "data:image" in token_str or token_str.startswith("data:"):
+                continue
+            id_counter["token"] = id_counter.get("token", 0) + 1
+            tok_num = id_counter["token"]
+            tok_id = f"t_{tok_num}"
+            token_ids.append(tok_id)
+            tokens_list.append({
+                "id": tok_id,
+                "text": token_str,
+                "bbox": None,
+                "page": page
+            })
+        return token_ids, tokens_list
 
-    total_len = max(len(text), 1)
+    x1 = bbox["x1"]
+    x2 = bbox["x2"]
+    y1 = bbox["y1"]
+    y2 = bbox["y2"]
+    width = max(abs(x2 - x1), 1.0)
+    height = max(abs(y2 - y1), 1.0)
 
-    for m in matches:
-        token_str = m.group()
-        # Ignorar cadenas base64 o tokens espurios excesivamente largos
-        if len(token_str) > 150 or "data:image" in token_str or token_str.startswith("data:"):
-            continue
-        id_counter["token"] = id_counter.get("token", 0) + 1
-        tok_id = f"t_{id_counter['token']}"
-        token_ids.append(tok_id)
+    # 1. Determinar líneas de texto
+    if "\n" in text:
+        raw_lines = text.split("\n")
+        lines = [l for l in raw_lines if l.strip()]
+        if not lines:
+            lines = [text]
+    else:
+        # Detectar si un bloque sin \n es multilínea según altura y caracteres
+        raw_words = text.split()
+        if len(raw_words) > 1:
+            h_per_line = 48.0 if height > 100 else 14.0
+            num_lines = max(1, min(len(raw_words), round(height / h_per_line)))
+            min_char_w = 0.35 * (height / num_lines)
+            max_chars_single_line = max(15, int(width / max(min_char_w, 1.0)))
 
-        tok_bbox = None
-        if bbox and "x1" in bbox and "x2" in bbox:
-            x1 = bbox["x1"]
-            x2 = bbox["x2"]
-            y1 = bbox["y1"]
-            y2 = bbox["y2"]
-            width = x2 - x1
-            tok_x1 = round(x1 + (m.start() / total_len) * width, 2)
-            tok_x2 = round(x1 + (m.end() / total_len) * width, 2)
+            if num_lines > 1 and len(text) > max_chars_single_line * 0.8:
+                target_chars = len(text) / num_lines
+                lines = []
+                curr = []
+                curr_len = 0
+                for w in raw_words:
+                    if curr and (curr_len + len(w) + 1 > target_chars * 1.15) and (len(lines) < num_lines - 1):
+                        lines.append(" ".join(curr))
+                        curr = [w]
+                        curr_len = len(w)
+                    else:
+                        curr.append(w)
+                        curr_len += len(w) + 1
+                if curr:
+                    lines.append(" ".join(curr))
+            else:
+                lines = [text]
+        else:
+            lines = [text]
+
+    num_lines = len(lines)
+    line_h = height / num_lines
+
+    for l_idx, line_str in enumerate(lines):
+        ly1 = round(y1 + l_idx * line_h, 2)
+        ly2 = round(y1 + (l_idx + 1) * line_h, 2)
+        line_len = max(len(line_str), 1)
+
+        for m in re.finditer(r'\S+', line_str):
+            token_str = m.group()
+            if len(token_str) > 150 or "data:image" in token_str or token_str.startswith("data:"):
+                continue
+
+            id_counter["token"] = id_counter.get("token", 0) + 1
+            tok_num = id_counter["token"]
+            tok_id = f"t_{tok_num}"
+            token_ids.append(tok_id)
+
+            tok_x1 = round(x1 + (m.start() / line_len) * width, 2)
+            tok_x2 = round(x1 + (m.end() / line_len) * width, 2)
+
             tok_bbox = {
                 "x1": min(tok_x1, tok_x2),
-                "y1": y1,
+                "y1": ly1,
                 "x2": max(tok_x1, tok_x2),
-                "y2": y2
+                "y2": ly2
             }
 
-        tokens_list.append({
-            "id": tok_id,
-            "text": token_str,
-            "bbox": tok_bbox,
-            "page": page
-        })
+            tokens_list.append({
+                "id": tok_id,
+                "text": token_str,
+                "bbox": tok_bbox,
+                "page": page
+            })
 
     return token_ids, tokens_list
 

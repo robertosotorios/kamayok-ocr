@@ -62,14 +62,29 @@ def handler(event):
         if ext == ".pdf" and force_rast:
             try:
                 import pypdfium2 as pdfium
-                pdf_doc = pdfium.PdfDocument(tmp_path)
-                if len(pdf_doc) == 1:
-                    print("[Docling Worker] 🖼️ Rasterizando PDF a PNG de 300 DPI antes de conversión...", flush=True)
+                total_pages = len(pdf_doc)
+                if total_pages == 1:
+                    print("[Docling Worker] 🖼️ Rasterizando PDF (1 página) a PNG de 300 DPI antes de conversión...", flush=True)
                     page = pdf_doc[0]
                     bitmap = page.render(scale=4.166667)
                     pil_image = bitmap.to_pil()
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as r_tmp:
                         pil_image.save(r_tmp.name, format="PNG")
+                        rasterized_tmp = r_tmp.name
+                        source = rasterized_tmp
+                elif total_pages > 1:
+                    print(f"[Docling Worker] 🖼️ Rasterizando PDF ({total_pages} páginas) a PDF rasterizado de 300 DPI...", flush=True)
+                    pil_images = []
+                    for page in pdf_doc:
+                        bitmap = page.render(scale=4.166667)
+                        pil_images.append(bitmap.to_pil().convert("RGB"))
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as r_tmp:
+                        pil_images[0].save(
+                            r_tmp.name,
+                            save_all=True,
+                            append_images=pil_images[1:],
+                            resolution=300
+                        )
                         rasterized_tmp = r_tmp.name
                         source = rasterized_tmp
             except Exception as r_err:
