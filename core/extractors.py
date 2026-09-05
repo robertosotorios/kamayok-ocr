@@ -305,11 +305,16 @@ def extract_layout_pages(
 
         text_content = fix_split_accents(text_content or "")
 
+        # Si el contenido contiene imágenes en base64 o enlaces de imagen Markdown, descartarlo
+        if "data:image" in text_content or text_content.strip().startswith("!["):
+            text_content = ""
+
         # Si es un contenedor de imagen y carece de texto real legible o es un placeholder gráfico, descartarlo
         is_placeholder = (
             not text_content or 
-            text_content.strip().startswith("<!-- 🖼️") or 
-            text_content.strip().startswith("<!-- image")
+            text_content.strip().startswith("<!--") or 
+            text_content.strip().startswith("![") or
+            "data:image" in text_content
         )
 
         is_table = (

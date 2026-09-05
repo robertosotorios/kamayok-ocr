@@ -48,7 +48,8 @@ def clean_markdown_output(raw_md: str) -> str:
     """Elimina comentarios de imagen residuales y saltos de línea redundantes del Markdown de Docling."""
     if not raw_md:
         return ""
-    clean_md = re.sub(r'<!--\s*(?:image|🖼️)[^>]*-->', '', raw_md)
+    clean_md = re.sub(r'!\[[^\]]*\]\(data:image\/[^\)]+\)', '', raw_md)
+    clean_md = re.sub(r'<!--\s*(?:image|🖼️)[^>]*-->', '', clean_md)
     clean_md = (
         clean_md
         .replace("<!-- image -->", "")

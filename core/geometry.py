@@ -99,6 +99,9 @@ def tokenize_text_to_spatial_tokens(
 
     for m in matches:
         token_str = m.group()
+        # Ignorar cadenas base64 o tokens espurios excesivamente largos
+        if len(token_str) > 150 or "data:image" in token_str or token_str.startswith("data:"):
+            continue
         id_counter["token"] = id_counter.get("token", 0) + 1
         tok_id = f"t_{id_counter['token']}"
         token_ids.append(tok_id)
