@@ -9,6 +9,9 @@ import traceback
 import requests
 import torch
 import runpod
+from PIL import Image
+
+Image.MAX_IMAGE_PIXELS = None
 
 from core.config import converter, cpu_converter, cuda_available
 from core.geometry import detect_file_extension

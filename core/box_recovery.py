@@ -11,6 +11,7 @@ try:
 except ImportError:
     np = None
 from PIL import Image
+Image.MAX_IMAGE_PIXELS = None
 
 from core.geometry import compute_bounding_box, tokenize_text_to_spatial_tokens
 from core.sanitizer import fix_split_accents, fix_fiscal_identifiers
@@ -34,7 +35,13 @@ def get_ocr_engine():
     # 1. Intentar RapidOCR (ONNX Runtime, ultra-rápido en GPU y CPU)
     try:
         from rapidocr_onnxruntime import RapidOCR
-        _OCR_ENGINE = ("rapidocr", RapidOCR())
+        # Especificar hilos explícitamente para evitar advertencias de afinidad de CPU en contenedores Docker/RunPod
+        num_threads = int(os.environ.get("OMP_NUM_THREADS", "4"))
+        try:
+            engine = RapidOCR(intra_op_num_threads=num_threads, inter_op_num_threads=1)
+        except Exception:
+            engine = RapidOCR()
+        _OCR_ENGINE = ("rapidocr", engine)
         print("[Box Recovery] ✅ Motor RapidOCR inicializado correctamente.", flush=True)
         return _OCR_ENGINE
     except Exception as e:
