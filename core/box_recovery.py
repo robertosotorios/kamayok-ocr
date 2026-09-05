@@ -55,12 +55,29 @@ def get_ocr_engine():
     return _OCR_ENGINE
 
 
+import unicodedata
+
+def normalize_text_for_comparison(text: str) -> str:
+    """Normaliza texto eliminando acentos, diacríticos y homogeneizando 0/O."""
+    if not text:
+        return ""
+    norm = unicodedata.normalize("NFD", text)
+    stripped = "".join(c for c in norm if unicodedata.category(c) != "Mn")
+    return stripped.lower().replace("0", "o")
+
+
+def clean_token_word(w: str) -> str:
+    """Limpia puntuación y tildes para comparación insensible de tokens."""
+    w_norm = normalize_text_for_comparison(w)
+    return re.sub(r'\W+', '', w_norm)
+
+
 def is_text_already_in_markdown(text: str, markdown: str) -> bool:
     """Comprueba si una porción significativa del texto ya está presente en el markdown."""
     if not text or not markdown:
         return False
-    clean_t = re.sub(r'\W+', '', text.lower())
-    clean_m = re.sub(r'\W+', '', markdown.lower())
+    clean_t = clean_token_word(text)
+    clean_m = clean_token_word(markdown)
     if len(clean_t) < 5:
         return clean_t in clean_m
     # Buscar subsecuencias de 15 caracteres para mayor sensibilidad en datos cortos (fechas, DNI, importes)
@@ -69,30 +86,29 @@ def is_text_already_in_markdown(text: str, markdown: str) -> bool:
     return (clean_t[:15] in clean_m) or (clean_t[-15:] in clean_m)
 
 
-def clean_token_word(w: str) -> str:
-    """Limpia puntuación para comparación insensible de tokens."""
-    return re.sub(r'\W+', '', w).lower()
-
-
 def refine_tokens_with_ocr_line(
     line_text: str,
     line_bbox: Dict[str, float],
     page_tokens: List[Dict[str, Any]]
 ) -> bool:
     """
-    Refina la geometría de tokens existentes utilizando la detección exacta de línea de RapidOCR.
+    Refina la geometría de tokens existentes utilizando la detección exacta de línea de RapidOCR/Tesseract.
     Evita que tokens en párrafos multilínea queden deformados verticalmente o desplazados horizontalmente.
+    Soporta coincidencia por lista de palabras o por texto concatenado (cuando el OCR omite espacios).
     """
     line_words = [clean_token_word(w) for w in line_text.split() if clean_token_word(w)]
     if not line_words:
         return False
 
     n = len(line_words)
-    line_len = max(len(line_text), 1)
     w = max(abs(line_bbox["x2"] - line_bbox["x1"]), 1.0)
     x1 = line_bbox["x1"]
     y1 = line_bbox["y1"]
     y2 = line_bbox["y2"]
+
+    # 1. Búsqueda por secuencia de palabras separadas
+    best_match_indices: Optional[Tuple[int, int]] = None
+    min_y_dist = float("inf")
 
     for i in range(len(page_tokens) - n + 1):
         match = True
@@ -102,34 +118,53 @@ def refine_tokens_with_ocr_line(
                 break
 
         if match:
-            # Comprobación de plausibilidad espacial si el token ya tenía bbox
             tok0_bb = page_tokens[i].get("bbox")
-            if tok0_bb and "y1" in tok0_bb and "y2" in tok0_bb:
-                tok_h = abs(tok0_bb["y2"] - tok0_bb["y1"])
-                if abs(tok0_bb["y1"] - y1) > max(tok_h * 2.0, 300.0):
-                    continue
+            y_dist = abs(tok0_bb["y1"] - y1) if (tok0_bb and "y1" in tok0_bb) else 0.0
+            # Si hay varios matches en la página (ej. "INSTALACIONES Y OBRAS DE GALICIA, S.L."),
+            # elegir el que esté espacialmente más cerca de la detección OCR actual
+            if y_dist < min_y_dist:
+                min_y_dist = y_dist
+                best_match_indices = (i, i + n)
 
-            matched_tokens = page_tokens[i : i + n]
-            curr_pos = 0
-            for tok in matched_tokens:
-                t_str = tok["text"]
-                idx = line_text.find(t_str, curr_pos)
-                if idx == -1:
-                    idx = curr_pos
-                start_c = idx
-                end_c = idx + len(t_str)
-                curr_pos = end_c
+    # 2. Búsqueda por concatenación continua si no hubo coincidencia por palabras separadas
+    # (ej: RapidOCR o Tesseract detecta 'PADREDONRUA14,BAJO' o '36203VIG0-PONTEVEDRA')
+    if not best_match_indices:
+        line_concat = "".join(line_words)
+        for i in range(len(page_tokens)):
+            accum = ""
+            for j in range(i, min(len(page_tokens), i + 12)):
+                accum += clean_token_word(page_tokens[j].get("text", ""))
+                if accum == line_concat:
+                    tok0_bb = page_tokens[i].get("bbox")
+                    y_dist = abs(tok0_bb["y1"] - y1) if (tok0_bb and "y1" in tok0_bb) else 0.0
+                    if y_dist < min_y_dist:
+                        min_y_dist = y_dist
+                        best_match_indices = (i, j + 1)
+                    break
+                if len(accum) > len(line_concat):
+                    break
 
-                tok_x1 = round(x1 + (start_c / line_len) * w, 2)
-                tok_x2 = round(x1 + (end_c / line_len) * w, 2)
+    if best_match_indices and min_y_dist < 400.0:
+        start_idx, end_idx = best_match_indices
+        matched_tokens = page_tokens[start_idx:end_idx]
+        total_tok_chars = max(sum(len(t.get("text", "")) for t in matched_tokens), 1)
 
-                tok["bbox"] = {
-                    "x1": min(tok_x1, tok_x2),
-                    "y1": y1,
-                    "x2": max(tok_x1, tok_x2),
-                    "y2": y2
-                }
-            return True
+        # Distribuir las coordenadas x1..x2 proporcionalmente al tamaño de cada token en la línea
+        curr_x = x1
+        for tok in matched_tokens:
+            t_str = tok.get("text", "")
+            t_w = (len(t_str) / total_tok_chars) * w
+            tok_x1 = round(curr_x, 2)
+            tok_x2 = round(curr_x + t_w, 2)
+            curr_x += t_w
+
+            tok["bbox"] = {
+                "x1": min(tok_x1, tok_x2),
+                "y1": y1,
+                "x2": max(tok_x1, tok_x2),
+                "y2": y2
+            }
+        return True
 
     return False
 

@@ -154,20 +154,47 @@ def tokenize_text_to_spatial_tokens(
             max_chars_single_line = max(15, int(width / max(min_char_w, 1.0)))
 
             if num_lines > 1 and len(text) > max_chars_single_line * 0.8:
-                target_chars = len(text) / num_lines
-                lines = []
-                curr = []
-                curr_len = 0
+                # 1.1 Intentar partición por delimitadores semánticos naturales (códigos postales, prefijos viales, fiscales)
+                LINE_BREAK_REGEX = re.compile(
+                    r'^(?:D\.?N\.?I:?|C\.?I\.?F:?|N\.?I\.?F:?|NIE:?|VAT:?|\d{5}|'
+                    r'Rúa|Rua|Calle|C/|Avda\.?|Avenida|Paseo|Plaza|Camino|Barrio|Carretera|Ctra\.?|'
+                    r'Padre)$',
+                    re.IGNORECASE
+                )
+                CONNECTORS = {"padre", "don", "de", "del", "la", "las", "el", "los", "san", "santa"}
+                semantic_lines = []
+                sem_curr = []
                 for w in raw_words:
-                    if curr and (curr_len + len(w) + 1 > target_chars * 1.15) and (len(lines) < num_lines - 1):
-                        lines.append(" ".join(curr))
-                        curr = [w]
-                        curr_len = len(w)
+                    is_break = bool(LINE_BREAK_REGEX.match(w))
+                    if is_break and sem_curr:
+                        if sem_curr[-1].lower() in CONNECTORS:
+                            sem_curr.append(w)
+                            continue
+                        semantic_lines.append(" ".join(sem_curr))
+                        sem_curr = [w]
                     else:
-                        curr.append(w)
-                        curr_len += len(w) + 1
-                if curr:
-                    lines.append(" ".join(curr))
+                        sem_curr.append(w)
+                if sem_curr:
+                    semantic_lines.append(" ".join(sem_curr))
+
+                # Si la partición semántica produjo al menos 2 líneas coherentes con la altura, adoptarla
+                if len(semantic_lines) >= 2 and abs(len(semantic_lines) - num_lines) <= 1:
+                    lines = semantic_lines
+                else:
+                    target_chars = len(text) / num_lines
+                    lines = []
+                    curr = []
+                    curr_len = 0
+                    for w in raw_words:
+                        if curr and (curr_len + len(w) + 1 > target_chars * 1.15) and (len(lines) < num_lines - 1):
+                            lines.append(" ".join(curr))
+                            curr = [w]
+                            curr_len = len(w)
+                        else:
+                            curr.append(w)
+                            curr_len += len(w) + 1
+                    if curr:
+                        lines.append(" ".join(curr))
             else:
                 lines = [text]
         else:
@@ -175,11 +202,17 @@ def tokenize_text_to_spatial_tokens(
 
     num_lines = len(lines)
     line_h = height / num_lines
+    max_line_chars = max(len(l) for l in lines) if lines else 1
 
     for l_idx, line_str in enumerate(lines):
         ly1 = round(y1 + l_idx * line_h, 2)
         ly2 = round(y1 + (l_idx + 1) * line_h, 2)
         line_len = max(len(line_str), 1)
+
+        # Si una línea es significativamente más corta que la línea más ancha del bloque
+        # (ej. "CIF: B-27750462" vs "INSTALACIONES Y OBRAS DE GALICIA, S.L."),
+        # no estirar sus palabras por todo el ancho del bloque; usar su proporción real respecto a la línea máxima.
+        eff_line_w = width if num_lines == 1 else min(width, width * (line_len / max(max_line_chars, 1)))
 
         for m in re.finditer(r'\S+', line_str):
             token_str = m.group()
@@ -191,8 +224,8 @@ def tokenize_text_to_spatial_tokens(
             tok_id = f"t_{tok_num}"
             token_ids.append(tok_id)
 
-            tok_x1 = round(x1 + (m.start() / line_len) * width, 2)
-            tok_x2 = round(x1 + (m.end() / line_len) * width, 2)
+            tok_x1 = round(x1 + (m.start() / line_len) * eff_line_w, 2)
+            tok_x2 = round(x1 + (m.end() / line_len) * eff_line_w, 2)
 
             tok_bbox = {
                 "x1": min(tok_x1, tok_x2),
