@@ -55,9 +55,9 @@ def handler(event):
         source = tmp_path
         print(f"[Docling Worker] 📄 Archivo listo en {tmp_path} ({len(file_bytes) / 1024:.1f} KB). Iniciando Docling...", flush=True)
 
-        # Preprocesamiento: rasterizado a 300 DPI si se activa force_rasterize o FORCE_RASTERIZE=true
+        # Preprocesamiento: rasterizado a 300 DPI si se activa force_rasterize o FORCE_RASTERIZE=true (por defecto True)
         rasterized_tmp = None
-        force_rast = job_input.get("force_rasterize", False) or os.environ.get("FORCE_RASTERIZE", "").lower() in ("1", "true", "yes")
+        force_rast = job_input.get("force_rasterize", True) or os.environ.get("FORCE_RASTERIZE", "true").lower() in ("1", "true", "yes")
         if ext == ".pdf" and force_rast:
             try:
                 import pypdfium2 as pdfium
