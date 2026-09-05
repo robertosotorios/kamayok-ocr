@@ -65,6 +65,7 @@ gpu_pipeline_options.table_structure_options = TableStructureOptions(
 gpu_pipeline_options.do_ocr = True
 gpu_pipeline_options.images_scale = IMAGES_SCALE
 gpu_pipeline_options.generate_page_images = True
+gpu_pipeline_options.generate_picture_images = True
 
 if cuda_available:
     try:
@@ -93,6 +94,7 @@ cpu_pipeline_options.table_structure_options = TableStructureOptions(
 cpu_pipeline_options.do_ocr = True
 cpu_pipeline_options.images_scale = IMAGES_SCALE
 cpu_pipeline_options.generate_page_images = True
+cpu_pipeline_options.generate_picture_images = True
 cpu_pipeline_options.ocr_options = create_ocr_options(use_gpu=False)
 
 # 3. Inicialización de conversores
